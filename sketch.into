@@ -1,0 +1,208 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+#define TRIG_PIN   5
+#define ECHO_PIN   18
+#define LED_GREEN  19
+#define LED_YELLOW 25
+#define LED_RED    26
+#define BUZZER     23
+#define RELAY_PIN  27
+#define POT_PIN    34
+#define BTN_PIN    14   // "Fill now" / clear fault button (to GND)
+
+#define RELAY_ON  HIGH   // swap if your relay is active-LOW
+#define RELAY_OFF LOW
+
+const float MIN_HEIGHT = 10.0, MAX_HEIGHT = 100.0;       // cm, set by knob
+const float FULL_LEVEL = 70.0, MEDIUM_LEVEL = 30.0;      // LED bands (%)
+const float MOTOR_ON_LEVEL = 30.0, MOTOR_OFF_LEVEL = 90.0;
+const unsigned long MAX_RUN_MS = 60000;                  // pump timeout (demo: 60 s)
+
+// Wi-Fi / MQTT (Wokwi guest network + public broker)
+const char* WIFI_SSID = "Wokwi-GUEST";
+const char* MQTT_HOST = "broker.hivemq.com";
+const char* MQTT_TOPIC = "wlm_demo_esp32/status";
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+WiFiClient espClient;
+PubSubClient mqtt(espClient);
+
+bool motorOn = false, wasOn = false, fault = false;
+unsigned long pumpStart = 0, lastPublish = 0;
+
+volatile bool btnPressed = false;
+volatile unsigned long lastBtn = 0;
+void IRAM_ATTR onButton() {
+  unsigned long now = millis();
+  if (now - lastBtn > 250) { btnPressed = true; lastBtn = now; }  // debounce
+}
+
+float getDistanceCM() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (duration == 0) return -1;
+  return duration * 0.0343 / 2.0;
+}
+
+// Median of 5 readings - rejects random spikes
+float getFilteredDistance() {
+  float r[5];
+  int n = 0;
+  for (int i = 0; i < 5; i++) {
+    float d = getDistanceCM();
+    if (d >= 0) r[n++] = d;
+    delay(30);
+  }
+  if (n < 3) return -1;   // too many failed readings = sensor error
+  for (int i = 1; i < n; i++) {           // insertion sort
+    float k = r[i]; int j = i - 1;
+    while (j >= 0 && r[j] > k) { r[j + 1] = r[j]; j--; }
+    r[j + 1] = k;
+  }
+  return r[n / 2];
+}
+
+float getTankHeightCM() {
+  int raw = analogRead(POT_PIN);
+  return MIN_HEIGHT + (raw / 4095.0) * (MAX_HEIGHT - MIN_HEIGHT);
+}
+
+void allIndicatorsOff() {
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(LED_YELLOW, LOW);
+  digitalWrite(LED_RED, LOW);
+  noTone(BUZZER);
+}
+
+void showOnLCD(const char* l1, const char* l2) {
+  char buf[17];
+  snprintf(buf, sizeof(buf), "%-16s", l1);
+  lcd.setCursor(0, 0); lcd.print(buf);
+  snprintf(buf, sizeof(buf), "%-16s", l2);
+  lcd.setCursor(0, 1); lcd.print(buf);
+}
+
+void mqttMaintain() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (!mqtt.connected()) {
+    static unsigned long lastTry = 0;
+    if (millis() - lastTry < 5000) return;
+    lastTry = millis();
+    String id = "wlm-" + String((uint32_t)esp_random(), HEX);
+    mqtt.connect(id.c_str());
+  }
+  mqtt.loop();
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_YELLOW, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+  pinMode(BUZZER, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, RELAY_OFF);
+  pinMode(BTN_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BTN_PIN), onButton, FALLING);
+
+  Wire.begin(21, 22);
+  lcd.init();
+  lcd.backlight();
+  showOnLCD("Water Level Mon.", "Starting...");
+
+  WiFi.begin(WIFI_SSID, "", 6);        // non-blocking: system works even without Wi-Fi
+  mqtt.setServer(MQTT_HOST, 1883);
+  mqtt.setSocketTimeout(2);
+  delay(1500);
+  lcd.clear();
+}
+
+void loop() {
+  mqttMaintain();
+
+  bool pressed = btnPressed;
+  btnPressed = false;
+
+  float tankHeight = getTankHeightCM();
+  float distance = getFilteredDistance();
+
+  // Sensor failure: pump OFF for safety
+  if (distance < 0) {
+    motorOn = false;
+    digitalWrite(RELAY_PIN, RELAY_OFF);
+    allIndicatorsOff();
+    showOnLCD("Sensor error", "Pump: OFF");
+    Serial.println("Sensor error - pump OFF");
+    delay(500);
+    return;
+  }
+
+  if (distance > tankHeight) distance = tankHeight;   // beyond tank depth = empty
+  float percent = (1.0 - (distance / tankHeight)) * 100.0;
+  percent = constrain(percent, 0, 100);
+
+  // ---- Pump control ----
+  if (pressed && fault) {
+    fault = false;                       // button clears a fault
+  } else if (pressed && !fault && percent < MOTOR_OFF_LEVEL) {
+    motorOn = true;                      // button = "fill now"
+  }
+
+  if (fault) {
+    motorOn = false;
+  } else {
+    if (percent < MOTOR_ON_LEVEL) motorOn = true;
+    else if (percent >= MOTOR_OFF_LEVEL) motorOn = false;
+  }
+
+  if (motorOn && !wasOn) pumpStart = millis();          // pump just started
+  if (motorOn && millis() - pumpStart > MAX_RUN_MS) {   // ran too long -> fault
+    fault = true;
+    motorOn = false;
+  }
+  wasOn = motorOn;
+  digitalWrite(RELAY_PIN, motorOn ? RELAY_ON : RELAY_OFF);
+
+  // ---- LEDs + buzzer ----
+  allIndicatorsOff();
+  const char* status;
+  if (percent >= FULL_LEVEL) {
+    digitalWrite(LED_GREEN, HIGH);  status = "FULL";
+  } else if (percent >= MEDIUM_LEVEL) {
+    digitalWrite(LED_YELLOW, HIGH); status = "MEDIUM";
+  } else {
+    digitalWrite(LED_RED, HIGH);
+    tone(BUZZER, 1000);             status = "LOW";
+  }
+
+  // ---- LCD ----
+  char l1[17], l2[17];
+  snprintf(l1, sizeof(l1), "Lvl:%3d%% H:%3dcm", (int)(percent + 0.5), (int)(tankHeight + 0.5));
+  if (fault) snprintf(l2, sizeof(l2), "PUMP FAULT: BTN");
+  else       snprintf(l2, sizeof(l2), "%-6s Pump:%-3s", status, motorOn ? "ON" : "OFF");
+  showOnLCD(l1, l2);
+
+  // ---- Remote monitoring (every 5 s) ----
+  if (mqtt.connected() && millis() - lastPublish > 5000) {
+    lastPublish = millis();
+    char payload[96];
+    snprintf(payload, sizeof(payload),
+             "{\"level\":%d,\"height\":%d,\"pump\":\"%s\",\"fault\":%s}",
+             (int)(percent + 0.5), (int)(tankHeight + 0.5),
+             motorOn ? "ON" : "OFF", fault ? "true" : "false");
+    mqtt.publish(MQTT_TOPIC, payload);
+  }
+
+  Serial.printf("H:%.0fcm L:%.0f%% %s Pump:%s%s\n", tankHeight, percent, status,
+                motorOn ? "ON" : "OFF", fault ? " [FAULT]" : "");
+  delay(200);
+}
