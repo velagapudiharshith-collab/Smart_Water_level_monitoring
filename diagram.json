@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "author": "Harshith",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-hc-sr04", "id": "us1", "top": -150, "left": 120, "attrs": {} },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd1",
+      "top": -230,
+      "left": 330,
+      "attrs": { "pins": "i2c" }
+    },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 123.5, "left": -201.8, "attrs": {} },
+    {
+      "type": "wokwi-led",
+      "id": "led_green",
+      "top": 30,
+      "left": 330,
+      "attrs": { "color": "green" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_yellow",
+      "top": 80,
+      "left": 330,
+      "attrs": { "color": "yellow" }
+    },
+    { "type": "wokwi-led", "id": "led_red", "top": 130, "left": 330, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 30, "left": 400, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 80, "left": 400, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r3", "top": 130, "left": 400, "attrs": { "value": "220" } },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 190, "left": 330, "attrs": {} },
+    { "type": "wokwi-relay-module", "id": "relay1", "top": 260, "left": 120, "attrs": {} },
+    {
+      "type": "wokwi-led",
+      "id": "led_motor",
+      "top": 280,
+      "left": 330,
+      "attrs": { "color": "blue" }
+    },
+    { "type": "wokwi-resistor", "id": "r4", "top": 280, "left": 400, "attrs": { "value": "220" } },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 330,
+      "left": 120,
+      "attrs": { "color": "green" }
+    }
+  ],
+  "connections": [
+    [ "us1:VCC", "esp:5V", "red", [] ],
+    [ "us1:GND", "esp:GND.1", "black", [] ],
+    [ "us1:TRIG", "esp:D5", "green", [] ],
+    [ "us1:ECHO", "esp:D18", "yellow", [] ],
+    [ "lcd1:VCC", "esp:5V", "red", [] ],
+    [ "lcd1:GND", "esp:GND.1", "black", [] ],
+    [ "lcd1:SDA", "esp:D21", "blue", [] ],
+    [ "lcd1:SCL", "esp:D22", "purple", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [] ],
+    [ "pot1:GND", "esp:GND.1", "black", [] ],
+    [ "pot1:SIG", "esp:D34", "orange", [] ],
+    [ "esp:D19", "led_green:A", "green", [] ],
+    [ "led_green:C", "r1:1", "black", [] ],
+    [ "r1:2", "esp:GND.2", "black", [] ],
+    [ "esp:D25", "led_yellow:A", "yellow", [] ],
+    [ "led_yellow:C", "r2:1", "black", [] ],
+    [ "r2:2", "esp:GND.2", "black", [] ],
+    [ "esp:D26", "led_red:A", "red", [] ],
+    [ "led_red:C", "r3:1", "black", [] ],
+    [ "r3:2", "esp:GND.2", "black", [] ],
+    [ "esp:D23", "bz1:1", "orange", [] ],
+    [ "bz1:2", "esp:GND.2", "black", [] ],
+    [ "relay1:VCC", "esp:5V", "red", [] ],
+    [ "relay1:GND", "esp:GND.3", "black", [] ],
+    [ "relay1:IN", "esp:D27", "cyan", [] ],
+    [ "relay1:COM", "esp:5V", "red", [] ],
+    [ "relay1:NO", "r4:1", "blue", [] ],
+    [ "r4:2", "led_motor:A", "blue", [] ],
+    [ "led_motor:C", "esp:GND.3", "black", [] ],
+    [ "btn1:1.l", "esp:D14", "green", [] ],
+    [ "btn1:2.l", "esp:GND.3", "black", [] ]
+  ],
+  "dependencies": {}
+}
